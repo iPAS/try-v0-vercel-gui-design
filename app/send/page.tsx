@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,39 +9,57 @@ import { Textarea } from "@/components/ui/textarea"
 import { ArrowLeft, Search, User, DollarSign } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useAuth } from "@/components/auth-provider"
+import { findUserByPayTag } from "@/lib/auth"
 
 export default function SendMoney() {
   const router = useRouter()
+  const { user, profile, loading } = useAuth()
   const [step, setStep] = useState(1)
   const [payTag, setPayTag] = useState("")
   const [amount, setAmount] = useState("")
   const [memo, setMemo] = useState("")
   const [recipient, setRecipient] = useState<any>(null)
   const [error, setError] = useState("")
+  const [searching, setSearching] = useState(false)
 
-  // Mock user database
-  const mockUsers = [
-    { payTag: "@sarah_j", name: "Sarah Johnson", avatar: "/placeholder.svg?height=40&width=40" },
-    { payTag: "@mike_c", name: "Mike Chen", avatar: "/placeholder.svg?height=40&width=40" },
-    { payTag: "@alex_r", name: "Alex Rivera", avatar: "/placeholder.svg?height=40&width=40" },
-    { payTag: "@emma_w", name: "Emma Wilson", avatar: "/placeholder.svg?height=40&width=40" },
-  ]
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/auth/login")
+    }
+  }, [user, loading, router])
 
-  const handlePayTagSearch = () => {
+  const handlePayTagSearch = async () => {
     setError("")
+    setSearching(true)
+
     if (!payTag.startsWith("@")) {
       setError("PayTag must start with @")
+      setSearching(false)
       return
     }
 
-    const user = mockUsers.find((u) => u.payTag.toLowerCase() === payTag.toLowerCase())
-    if (!user) {
+    if (payTag === profile?.pay_tag) {
+      setError("You cannot send money to yourself")
+      setSearching(false)
+      return
+    }
+
+    try {
+      const user = await findUserByPayTag(payTag)
+      if (!user) {
+        setError("User not found")
+        setSearching(false)
+        return
+      }
+
+      setRecipient(user)
+      setStep(2)
+    } catch (err) {
       setError("User not found")
-      return
+    } finally {
+      setSearching(false)
     }
-
-    setRecipient(user)
-    setStep(2)
   }
 
   const handleAmountNext = () => {
@@ -51,8 +69,7 @@ export default function SendMoney() {
       setError("Amount must be greater than zero")
       return
     }
-    if (amountNum > 2847.5) {
-      // Mock balance check
+    if (amountNum > (profile?.balance || 0)) {
       setError("Amount exceeds available balance")
       return
     }
@@ -60,7 +77,19 @@ export default function SendMoney() {
   }
 
   const handleConfirm = () => {
-    router.push(`/send/pin?payTag=${encodeURIComponent(payTag)}&amount=${amount}&memo=${encodeURIComponent(memo)}`)
+    router.push(`/send/pin?recipientId=${recipient.id}&amount=${amount}&memo=${encodeURIComponent(memo)}`)
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (!user || !profile) {
+    return null
   }
 
   return (
@@ -116,35 +145,9 @@ export default function SendMoney() {
 
               {error && <div className="text-red-600 text-sm bg-red-50 p-3 rounded-lg">{error}</div>}
 
-              <Button onClick={handlePayTagSearch} className="w-full">
-                Find User
+              <Button onClick={handlePayTagSearch} className="w-full" disabled={searching}>
+                {searching ? "Searching..." : "Find User"}
               </Button>
-
-              {/* Quick Recipients */}
-              <div className="space-y-2">
-                <Label>Recent Recipients</Label>
-                <div className="space-y-2">
-                  {mockUsers.slice(0, 3).map((user) => (
-                    <div
-                      key={user.payTag}
-                      onClick={() => {
-                        setPayTag(user.payTag)
-                        setRecipient(user)
-                        setStep(2)
-                      }}
-                      className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer hover:bg-gray-50"
-                    >
-                      <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
-                        <User className="w-5 h-5 text-gray-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium">{user.name}</p>
-                        <p className="text-sm text-gray-500">{user.payTag}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </CardContent>
           </Card>
         )}
@@ -165,8 +168,8 @@ export default function SendMoney() {
                   <User className="w-5 h-5 text-gray-600" />
                 </div>
                 <div>
-                  <p className="font-medium">{recipient.name}</p>
-                  <p className="text-sm text-gray-500">{recipient.payTag}</p>
+                  <p className="font-medium">{recipient.full_name}</p>
+                  <p className="text-sm text-gray-500">{recipient.pay_tag}</p>
                 </div>
               </div>
 
@@ -181,6 +184,7 @@ export default function SendMoney() {
                   step="0.01"
                   min="0"
                 />
+                <p className="text-xs text-gray-500">Available balance: ${profile.balance.toFixed(2)}</p>
               </div>
 
               <div className="space-y-2">
@@ -219,8 +223,8 @@ export default function SendMoney() {
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-gray-600">To:</span>
                   <div className="text-right">
-                    <p className="font-medium">{recipient.name}</p>
-                    <p className="text-sm text-gray-500">{recipient.payTag}</p>
+                    <p className="font-medium">{recipient.full_name}</p>
+                    <p className="text-sm text-gray-500">{recipient.pay_tag}</p>
                   </div>
                 </div>
 
@@ -238,7 +242,7 @@ export default function SendMoney() {
 
                 <div className="flex justify-between items-center py-2">
                   <span className="text-gray-600">From:</span>
-                  <span>Account ****1234</span>
+                  <span>{profile.pay_tag}</span>
                 </div>
               </div>
 
